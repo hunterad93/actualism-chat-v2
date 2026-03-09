@@ -21,7 +21,7 @@ from app_config.config import (
     MAX_TOOL_LINES_PER_MATCH,
     MAX_TOOL_MATCHES_IN_CONTEXT,
     MAX_TOOL_ROUNDS,
-    OPENAI_API_KEY,
+    OPENROUTER_API_KEY,
     OPENAI_MODEL,
     REQUEST_TIMEOUT_SECONDS,
     SITE_BASE_URL,
@@ -29,13 +29,13 @@ from app_config.config import (
 from app_config.prompts import STANDARD_SYSTEM_PROMPT
 from app_config.tools import TOOLS
 
-if not OPENAI_API_KEY:
-    raise RuntimeError("Missing OPENAI_API_KEY in environment/.env")
+if not OPENROUTER_API_KEY:
+    raise RuntimeError("Missing OPENROUTER_API_KEY in environment/.env")
 
 if not CHAINLIT_AUTH_USERNAME or not CHAINLIT_AUTH_PASSWORD:
     raise RuntimeError("Missing CHAINLIT_AUTH_USERNAME/CHAINLIT_AUTH_PASSWORD in environment/.env")
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
 
 @cl.password_auth_callback
 def auth_callback(username: str, password: str) -> cl.User | None:
@@ -80,11 +80,11 @@ async def _search_chunks(arguments: dict[str, Any]) -> dict[str, Any]:
     if "path_prefix" in arguments:
         path_prefix = arguments["path_prefix"]
         if isinstance(path_prefix, str):
-            payload["path_prefix"] = _normalize_site_path(path_prefix)
+            normalized_path_prefix = _normalize_site_path(path_prefix)
+            if normalized_path_prefix != "/":
+                payload["path_prefix"] = normalized_path_prefix
     if "top_k" in arguments:
         payload["top_k"] = arguments["top_k"]
-    if "namespace" in arguments:
-        payload["namespace"] = arguments["namespace"]
     return await asyncio.to_thread(_post_json, "/search-chunks", payload)
 
 

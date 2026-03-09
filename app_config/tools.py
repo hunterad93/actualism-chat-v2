@@ -20,7 +20,6 @@ TOOLS: list[dict[str, Any]] = [
                         "description": "Optional site path filter beginning with `/`, for example `/richard`, `/richard/articles`, or `/library/glossary`.",
                     },
                     "top_k": {"type": "integer", "minimum": 1, "maximum": 200},
-                    "namespace": {"type": "string"},
                 },
                 "required": ["query"],
                 "additionalProperties": False,

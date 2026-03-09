@@ -1,0 +1,9 @@
+requests
+beautifulsoup4
+markdownify
+pinecone
+python-dotenv
+fastapi
+uvicorn
+chainlit
+openai

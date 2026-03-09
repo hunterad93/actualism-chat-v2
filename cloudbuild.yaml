@@ -1,0 +1,35 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - gcr.io/magnetic-mender-389117/actualism-chat:latest
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - gcr.io/magnetic-mender-389117/actualism-chat:latest
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - actualism-chat
+      - --image
+      - gcr.io/magnetic-mender-389117/actualism-chat:latest
+      - --region
+      - us-central1
+      - --platform
+      - managed
+      - --allow-unauthenticated
+      - --port
+      - "8080"
+      - --set-env-vars
+      - API_BASE_URL=http://127.0.0.1:8000,OPENAI_MODEL=gpt-5-mini,PINECONE_INDEX=actualism,PINECONE_NAMESPACE=default
+      - --set-secrets
+      - OPENAI_API_KEY=OPENAI_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,CHAINLIT_AUTH_USERNAME=CHAINLIT_AUTH_USERNAME:latest,CHAINLIT_AUTH_PASSWORD=CHAINLIT_AUTH_PASSWORD:latest,CHAINLIT_AUTH_SECRET=CHAINLIT_AUTH_SECRET:latest
+
+images:
+  - gcr.io/magnetic-mender-389117/actualism-chat:latest

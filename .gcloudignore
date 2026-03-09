@@ -1,0 +1,5 @@
+*.env
+scrape/site_markdown/
+site_markdown/
+__pycache__/
+.git/

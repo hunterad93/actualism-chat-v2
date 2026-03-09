@@ -1,0 +1,88 @@
+:root {
+  --background: 255 255 204;
+  --foreground: 106 0 0;
+  --card: 255 255 204;
+  --card-foreground: 106 0 0;
+  --popover: 255 255 204;
+  --popover-foreground: 106 0 0;
+  --primary: 106 0 0;
+  --primary-foreground: 248 244 240;
+  --secondary: 236 226 220;
+  --secondary-foreground: 106 0 0;
+  --muted: 236 226 220;
+  --muted-foreground: 122 46 46;
+  --accent: 232 216 208;
+  --accent-foreground: 106 0 0;
+  --border: 196 162 162;
+  --input: 236 226 220;
+  --ring: 106 0 0;
+  --sidebar-background: 255 255 204;
+  --sidebar-foreground: 106 0 0;
+  --sidebar-primary: 106 0 0;
+  --sidebar-primary-foreground: 248 244 240;
+  --sidebar-accent: 236 226 220;
+  --sidebar-accent-foreground: 106 0 0;
+  --sidebar-border: 196 162 162;
+  --sidebar-ring: 106 0 0;
+}
+
+html,
+body {
+  background: #6a0000;
+  color: #6a0000;
+}
+
+#root,
+[data-testid="app-layout"],
+[data-testid="chat-view"],
+main {
+  background: #ffffcc;
+  color: #6a0000;
+}
+
+body,
+button,
+input,
+textarea,
+select {
+  color: #6a0000;
+}
+
+a {
+  color: #6a0000;
+  text-decoration-color: rgba(106, 0, 0, 0.45);
+}
+
+a:hover {
+  color: #4f0000;
+  text-decoration-color: rgba(106, 0, 0, 0.8);
+}
+
+code,
+pre {
+  background: #efe6df;
+  color: #6a0000;
+}
+
+blockquote {
+  border-left: 3px solid rgba(106, 0, 0, 0.3);
+}
+
+hr {
+  border-color: rgba(106, 0, 0, 0.2);
+}
+
+footer,
+.footer,
+[class*="footer"] {
+  color: #6a0000;
+}
+
+[data-testid="chat-settings"],
+[data-testid="chat-history"],
+[role="dialog"],
+[class*="modal"],
+[class*="panel"],
+[class*="sidebar"] {
+  color: #6a0000;
+}

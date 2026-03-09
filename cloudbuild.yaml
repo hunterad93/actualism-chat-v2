@@ -26,8 +26,12 @@ steps:
       - --allow-unauthenticated
       - --port
       - "8080"
+      - --min-instances
+      - "1"
+      - --max-instances
+      - "10"
       - --set-env-vars
-      - API_BASE_URL=http://127.0.0.1:8000,OPENAI_MODEL=gpt-5-mini,PINECONE_INDEX=actualism,PINECONE_NAMESPACE=default
+      - API_BASE_URL=http://127.0.0.1:8000,PINECONE_INDEX=actualism,PINECONE_NAMESPACE=default
       - --set-secrets
       - OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,PINECONE_API_KEY=PINECONE_API_KEY:latest,CHAINLIT_AUTH_USERNAME=CHAINLIT_AUTH_USERNAME:latest,CHAINLIT_AUTH_PASSWORD=CHAINLIT_AUTH_PASSWORD:latest,CHAINLIT_AUTH_SECRET=CHAINLIT_AUTH_SECRET:latest
 

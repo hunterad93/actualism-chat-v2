@@ -45,7 +45,17 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
         chunk = "".join(tokens[i : i + chunk_size]).strip()
         if chunk:
             chunks.append(chunk)
-        i += step
+        next_i = i + step
+        if next_i >= len(tokens):
+            break
+
+        if next_i > 0:
+            while next_i < len(tokens):
+                prev = tokens[next_i - 1].rstrip()
+                if re.search(r"[.!?][\"')\]]*$", prev):
+                    break
+                next_i += 1
+        i = next_i
     return chunks
 
 

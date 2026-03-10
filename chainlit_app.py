@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 
 import chainlit as cl
 import requests
+from chainlit.input_widget import Select
 from openai import OpenAI
 
 from app_config.config import (
@@ -17,25 +18,36 @@ from app_config.config import (
     CHAINLIT_AUTH_PASSWORD,
     CHAINLIT_AUTH_USERNAME,
     MAX_CHAT_TURNS,
+    MODEL_CONFIG,
     MAX_TOOL_LINE_CHARS,
     MAX_TOOL_LINES_PER_MATCH,
     MAX_TOOL_MATCHES_IN_CONTEXT,
     MAX_TOOL_ROUNDS,
-    OPENROUTER_API_KEY,
+    OPENAI_API_KEY,
     OPENAI_MODEL,
+    OPENROUTER_API_KEY,
+    OPENROUTER_MODEL,
     REQUEST_TIMEOUT_SECONDS,
     SITE_BASE_URL,
 )
 from app_config.prompts import STANDARD_SYSTEM_PROMPT
 from app_config.tools import TOOLS
 
-if not OPENROUTER_API_KEY:
-    raise RuntimeError("Missing OPENROUTER_API_KEY in environment/.env")
+SUPPORTED_MODELS = tuple(MODEL_CONFIG.keys())
+MODEL_SETTING_ID = "model_name"
+QUOTE_SELECTION_ONLY_TOOLS = [
+    tool for tool in TOOLS if tool.get("function", {}).get("name") == "quote_selection"
+]
+
+openai_client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+openrouter_client = (
+    OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
+    if OPENROUTER_API_KEY
+    else None
+)
 
 if not CHAINLIT_AUTH_USERNAME or not CHAINLIT_AUTH_PASSWORD:
     raise RuntimeError("Missing CHAINLIT_AUTH_USERNAME/CHAINLIT_AUTH_PASSWORD in environment/.env")
-
-client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
 
 @cl.password_auth_callback
 def auth_callback(username: str, password: str) -> cl.User | None:
@@ -205,6 +217,9 @@ def _tool_step_output(tool_name: str, result: dict[str, Any]) -> str:
         matches = result.get("matches", [])
         return f"Returned {len(matches) if isinstance(matches, list) else 0} matches."
     if tool_name == "quote_selection":
+        if result.get("ok") is False:
+            error = result.get("error")
+            return f"Quote selection invalid: {error}" if isinstance(error, str) else "Quote selection invalid."
         quotes = result.get("quotes", [])
         if isinstance(quotes, list) and quotes:
             return f"Selected {len(quotes)} quotes."
@@ -270,23 +285,49 @@ def _trim_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
     return history[-max_messages:]
 
 
-async def _run_agent(history: list[dict[str, str]]) -> str:
+def _client_for_model(model_name: str) -> OpenAI:
+    config = MODEL_CONFIG.get(model_name)
+    if config is None:
+        raise RuntimeError(f"Unsupported model: {model_name}")
+
+    provider = config["provider"]
+    if provider == "openai":
+        if openai_client is None:
+            raise RuntimeError("Missing OPENAI_API_KEY in environment/.env")
+        return openai_client
+    if provider == "openrouter":
+        if openrouter_client is None:
+            raise RuntimeError("Missing OPENROUTER_API_KEY in environment/.env")
+        return openrouter_client
+    raise RuntimeError(f"Unsupported provider for model {model_name}: {provider}")
+
+
+async def _run_agent(history: list[dict[str, str]], model_name: str) -> str:
+    client = _client_for_model(model_name)
     messages: list[dict[str, Any]] = [{"role": "system", "content": STANDARD_SYSTEM_PROMPT}, *_trim_history(history)]
     chunk_sources: dict[tuple[str, int], dict[str, Any]] = {}
+    debug_events: list[str] = [f"model={model_name}"]
+    quote_selection_attempted = False
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for round_number in range(1, MAX_TOOL_ROUNDS + 1):
+        available_tools = TOOLS if round_number < MAX_TOOL_ROUNDS - 1 else QUOTE_SELECTION_ONLY_TOOLS
         response = await asyncio.to_thread(
             client.chat.completions.create,
-            model=OPENAI_MODEL,
+            model=model_name,
             messages=messages,
-            tools=TOOLS,
+            tools=available_tools,
             tool_choice="auto",
         )
         message = response.choices[0].message
         messages.append(_assistant_message_dict(message))
 
         if not message.tool_calls:
+            debug_events.append(f"round={round_number} tool_calls=none")
             break
+        debug_events.append(
+            f"round={round_number} tool_calls="
+            + ",".join(tool_call.function.name for tool_call in message.tool_calls)
+        )
 
         for tool_call in message.tool_calls:
             tool_name = tool_call.function.name
@@ -294,6 +335,7 @@ async def _run_agent(history: list[dict[str, str]]) -> str:
                 arguments = json.loads(tool_call.function.arguments or "{}")
             except json.JSONDecodeError:
                 arguments = {}
+                debug_events.append(f"round={round_number} {tool_name}=invalid_json_args")
 
             async with cl.Step(name=tool_name, type="tool") as step:
                 step.input = json.dumps(arguments, ensure_ascii=False, indent=2)
@@ -301,6 +343,9 @@ async def _run_agent(history: list[dict[str, str]]) -> str:
                 if tool_name == "search_chunks":
                     result = await _search_chunks(arguments)
                     matches = result.get("matches", [])
+                    debug_events.append(
+                        f"round={round_number} search_chunks_matches={len(matches) if isinstance(matches, list) else 0}"
+                    )
                     if isinstance(matches, list):
                         for match in matches:
                             if not isinstance(match, dict):
@@ -310,7 +355,17 @@ async def _run_agent(history: list[dict[str, str]]) -> str:
                             if isinstance(url_path, str) and isinstance(chunk_index, int):
                                 chunk_sources[(url_path, chunk_index)] = match
                 elif tool_name == "quote_selection":
+                    quote_selection_attempted = True
                     result = _validate_quote_selection(arguments, chunk_sources)
+                    if result.get("ok"):
+                        quotes = result.get("quotes", [])
+                        debug_events.append(
+                            f"round={round_number} quote_selection_quotes={len(quotes) if isinstance(quotes, list) else 0}"
+                        )
+                    else:
+                        debug_events.append(
+                            f"round={round_number} quote_selection_error={result.get('error')}"
+                        )
                 else:
                     result = {"ok": False, "error": f"unknown tool: {tool_name}"}
 
@@ -333,13 +388,50 @@ async def _run_agent(history: list[dict[str, str]]) -> str:
                     return _format_quotes(quotes, chunk_sources)
                 continue
 
+    async with cl.Step(name="debug_trace", type="tool") as step:
+        step.output = (
+            "No supported quotations found.\n"
+            f"quote_selection_attempted={quote_selection_attempted}\n"
+            + "\n".join(debug_events[-12:])
+        )
     return "No supported quotations found."
 
 
 @cl.on_chat_start
 async def on_chat_start() -> None:
     cl.user_session.set("history", [])
-    await cl.Message(content="Ask a question and I will answer with quotations only.").send()
+    default_model = (
+        OPENROUTER_MODEL
+        if OPENROUTER_MODEL in SUPPORTED_MODELS
+        else OPENAI_MODEL
+        if OPENAI_MODEL in SUPPORTED_MODELS
+        else SUPPORTED_MODELS[0]
+    )
+    cl.user_session.set("selected_model", default_model)
+    await cl.ChatSettings(
+        [
+            Select(
+                id=MODEL_SETTING_ID,
+                label="Model",
+                values=list(SUPPORTED_MODELS),
+                initial_value=default_model,
+            )
+        ]
+    ).send()
+    await cl.Message(
+        content=(
+            "Ask a question and I will answer with quotations only.\n"
+            "Use the settings panel to choose the model."
+        )
+    ).send()
+
+
+@cl.on_settings_update
+async def on_settings_update(settings: dict[str, Any]) -> None:
+    selected_model = settings.get(MODEL_SETTING_ID)
+    if isinstance(selected_model, str) and selected_model in SUPPORTED_MODELS:
+        cl.user_session.set("selected_model", selected_model)
+        await cl.Message(content=f"Model switched to `{selected_model}`.").send()
 
 
 @cl.on_message
@@ -347,9 +439,10 @@ async def on_message(message: cl.Message) -> None:
     history = cl.user_session.get("history") or []
     history.append({"role": "user", "content": message.content})
     history = _trim_history(history)
+    selected_model = cl.user_session.get("selected_model") or SUPPORTED_MODELS[0]
 
     try:
-        answer = await _run_agent(history)
+        answer = await _run_agent(history, selected_model)
     except Exception as exc:
         answer = f"Unable to retrieve quotations: {exc}"
 

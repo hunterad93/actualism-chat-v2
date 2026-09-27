@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import time
 from urllib.parse import urldefrag, urljoin, urlparse
 
@@ -27,10 +28,14 @@ def normalize_url(url: str) -> str:
     # Remove fragments and trailing slash consistency for dedupe.
     clean, _fragment = urldefrag(url)
     parsed = urlparse(clean)
+    scheme = parsed.scheme
+    if scheme in {"http", "https"}:
+        # Treat http/https variants as the same page for dedupe.
+        scheme = "https"
     path = parsed.path or "/"
     if path != "/" and path.endswith("/"):
         path = path[:-1]
-    return parsed._replace(path=path).geturl()
+    return parsed._replace(scheme=scheme, path=path).geturl()
 
 
 def local_markdown_path(output_root: str, url: str) -> str:
@@ -70,15 +75,33 @@ def strip_surrogates(text: str) -> str:
     return "".join(ch for ch in text if not 0xD800 <= ord(ch) <= 0xDFFF)
 
 
+META_CHARSET_RE = re.compile(rb"""<meta[^>]+charset=["']?([A-Za-z0-9_-]+)""", re.IGNORECASE)
+LATIN1_ALIASES = {"iso-8859-1", "iso8859-1", "latin-1", "latin1", "l1", "ascii", "us-ascii"}
+
+
 def response_html(response: requests.Response) -> str:
-    encoding = (response.encoding or "").lower()
-    if not encoding or encoding == "iso-8859-1":
-        apparent_encoding = response.apparent_encoding
-        if apparent_encoding:
-            encoding = apparent_encoding
-    if not encoding:
-        encoding = "utf-8"
-    return response.content.decode(encoding, errors="replace")
+    # Don't use response.apparent_encoding: its guess varies between charset_normalizer
+    # versions and has mis-detected this site's pages as DOS codepages (– -> û, ’ -> Æ).
+    declared = None
+    if "charset=" in response.headers.get("Content-Type", "").lower():
+        declared = response.encoding
+    else:
+        match = META_CHARSET_RE.search(response.content[:4096])
+        if match:
+            declared = match.group(1).decode("ascii")
+    if declared and declared.lower().replace("_", "-") in LATIN1_ALIASES:
+        # Same as browsers (WHATWG): latin-1/ascii labels mean windows-1252.
+        declared = "windows-1252"
+    if declared:
+        try:
+            return response.content.decode(declared, errors="replace")
+        except LookupError:
+            pass
+    try:
+        return response.content.decode("utf-8")
+    except UnicodeDecodeError:
+        # The site is mostly undeclared Windows-1252 (smart quotes, en dashes).
+        return response.content.decode("windows-1252", errors="replace")
 
 
 def save_markdown(output_root: str, url: str, html: str) -> str:
@@ -106,19 +129,34 @@ def load_state(
     with open(state_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    seen = set(data.get("seen", []))
-    to_scrape = list(data.get("to_scrape", []))
-    saved = dict(data.get("saved", {}))
+    seen = {normalize_url(url) for url in data.get("seen", [])}
+    to_scrape = [normalize_url(url) for url in data.get("to_scrape", [])]
+    raw_saved = dict(data.get("saved", {}))
     raw_failed = dict(data.get("failed", {}))
-    discovered_from = dict(data.get("discovered_from", {}))
+    raw_discovered_from = dict(data.get("discovered_from", {}))
+
+    saved: dict[str, str] = {}
+    for url, path in raw_saved.items():
+        saved[normalize_url(url)] = path
+
+    discovered_from: dict[str, str | None] = {}
+    for url, source in raw_discovered_from.items():
+        discovered_from[normalize_url(url)] = (
+            normalize_url(source) if source else None
+        )
 
     # Backwards-compatible migration: old failed state used plain strings.
     failed: dict[str, dict[str, str | None]] = {}
-    for url, value in raw_failed.items():
+    for raw_url, value in raw_failed.items():
+        url = normalize_url(raw_url)
         if isinstance(value, dict):
             failed[url] = {
                 "reason": value.get("reason"),
-                "found_on": value.get("found_on"),
+                "found_on": (
+                    normalize_url(value.get("found_on"))
+                    if value.get("found_on")
+                    else None
+                ),
             }
         else:
             failed[url] = {"reason": str(value), "found_on": discovered_from.get(url)}
@@ -251,7 +289,7 @@ def crawl(start_url: str, output_root: str, delay_seconds: float, max_pages: int
         count += 1
         print(f"[{count}] {url} -> {output_path}")
 
-        for link in extract_links(url, html, allowed_netloc):
+        for link in extract_links(response.url, html, allowed_netloc):
             if link not in discovered_from:
                 discovered_from[link] = url
             if link not in seen:

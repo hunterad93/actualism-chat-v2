@@ -1,4 +1,5 @@
 *.env
-scrape/site_markdown/
-site_markdown/
+site_markdown*/
 __pycache__/
+.pinecone_manifest.json*
+backups/
